@@ -55,7 +55,7 @@ from splitting import split_data
 
 DATA_FILE     = "./data/dataset.csv"   # path to the dataset CSV
 OUTPUT_FILE   = "results.json"         # where to write the results summary
-BATCH_SIZE    = 8                  # 8 works well on T4 GPU (16GB)
+BATCH_SIZE    = 8
 USE_GEOMETRIC = True                  # set True to enable geometric feature extraction
 TEST_FILE        = "./data/test.csv"   # competition test set (labels are null)
 PREDICTIONS_FILE = "predictions.csv"   # output file with predicted labels

@@ -44,4 +44,3 @@ def get_model_and_tokenizer(
     )
     model.eval()
     return model, tokenizer
-
