@@ -18,6 +18,19 @@ single entry point called from the notebook.
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
+
+
+def _selected_layer_indices(n_layers: int) -> list[int]:
+    """Choose stable lower/middle/final transformer layers."""
+    candidates = [
+        n_layers // 3,
+        n_layers // 2,
+        (2 * n_layers) // 3,
+        max(n_layers - 5, 0),
+        n_layers - 1,
+    ]
+    return sorted(set(int(i) for i in candidates if 0 <= i < n_layers))
 
 
 def aggregate(
@@ -41,21 +54,35 @@ def aggregate(
         Replace or extend the skeleton below with alternative layer selection,
         token pooling (mean, max, weighted), or multi-layer fusion strategies.
     """
-    # ------------------------------------------------------------------
-    # STUDENT: Replace or extend the aggregation below.
-    # ------------------------------------------------------------------
+    real_positions = attention_mask.nonzero(as_tuple=False).flatten()
+    first_pos = int(real_positions[0].item())
+    last_pos = int(real_positions[-1].item())
+    end_pos = last_pos + 1
 
-    # Default: last real token of the final transformer layer.
-    layer = hidden_states[-1]          # (seq_len, hidden_dim)
+    layer_indices = _selected_layer_indices(hidden_states.shape[0])
+    features: list[torch.Tensor] = []
 
-    # Find the index of the last real (non-padding) token.
-    real_positions = attention_mask.nonzero(as_tuple=False)  # (n_real, 1)
-    last_pos = int(real_positions[-1].item())                 # scalar index
+    for layer_idx in layer_indices:
+        layer = hidden_states[layer_idx]  # (seq_len, hidden_dim)
+        last_token = layer[last_pos]
 
-    feature = layer[last_pos]          # (hidden_dim,)
+        window_32 = layer[max(first_pos, end_pos - 32) : end_pos]
+        window_96 = layer[max(first_pos, end_pos - 96) : end_pos]
+        full_text = layer[first_pos:end_pos]
 
-    return feature
-    # ------------------------------------------------------------------
+        features.extend(
+            [
+                last_token,
+                window_32.mean(dim=0),
+                window_96.mean(dim=0),
+                full_text.mean(dim=0),
+            ]
+        )
+
+    scalar_features = extract_geometric_features(hidden_states, attention_mask)
+    features.append(scalar_features)
+
+    return torch.cat(features, dim=0)
 
 
 def extract_geometric_features(
@@ -81,12 +108,33 @@ def extract_geometric_features(
         norms, inter-layer cosine similarity (representation drift), or
         sequence length.
     """
-    # ------------------------------------------------------------------
-    # STUDENT: Replace or extend the geometric feature extraction below.
-    # ------------------------------------------------------------------
+    real_positions = attention_mask.nonzero(as_tuple=False).flatten()
+    first_pos = int(real_positions[0].item())
+    last_pos = int(real_positions[-1].item())
+    end_pos = last_pos + 1
+    seq_len = max(end_pos - first_pos, 1)
 
-    # Placeholder: returns an empty tensor (no geometric features).
-    return torch.zeros(0)
+    layer_indices = _selected_layer_indices(hidden_states.shape[0])
+    last_vectors = torch.stack([hidden_states[i, last_pos] for i in layer_indices])
+    window_start = max(first_pos, end_pos - 96)
+    pooled_vectors = torch.stack(
+        [hidden_states[i, window_start:end_pos].mean(dim=0) for i in layer_indices]
+    )
+
+    scalars: list[torch.Tensor] = [
+        hidden_states.new_tensor(float(seq_len)),
+        hidden_states.new_tensor(float(seq_len)).log1p(),
+    ]
+    scalars.extend(last_vectors.norm(dim=1).unbind())
+    scalars.extend(pooled_vectors.norm(dim=1).unbind())
+
+    if len(layer_indices) > 1:
+        adjacent_cos = F.cosine_similarity(last_vectors[:-1], last_vectors[1:], dim=1)
+        final_cos = F.cosine_similarity(last_vectors[:-1], last_vectors[-1:], dim=1)
+        scalars.extend(adjacent_cos.unbind())
+        scalars.extend(final_cos.unbind())
+
+    return torch.stack(scalars).float()
 
 
 def aggregation_and_feature_extraction(
