@@ -55,34 +55,20 @@ def aggregate(
         token pooling (mean, max, weighted), or multi-layer fusion strategies.
     """
     real_positions = attention_mask.nonzero(as_tuple=False).flatten()
-    first_pos = int(real_positions[0].item())
     last_pos = int(real_positions[-1].item())
     end_pos = last_pos + 1
 
-    layer_indices = _selected_layer_indices(hidden_states.shape[0])
-    features: list[torch.Tensor] = []
+    layer = hidden_states[-1]
+    window = layer[max(0, end_pos - 32) : end_pos]
 
-    for layer_idx in layer_indices:
-        layer = hidden_states[layer_idx]  # (seq_len, hidden_dim)
-        last_token = layer[last_pos]
-
-        window_32 = layer[max(first_pos, end_pos - 32) : end_pos]
-        window_96 = layer[max(first_pos, end_pos - 96) : end_pos]
-        full_text = layer[first_pos:end_pos]
-
-        features.extend(
-            [
-                last_token,
-                window_32.mean(dim=0),
-                window_96.mean(dim=0),
-                full_text.mean(dim=0),
-            ]
-        )
-
-    scalar_features = extract_geometric_features(hidden_states, attention_mask)
-    features.append(scalar_features)
-
-    return torch.cat(features, dim=0)
+    return torch.cat(
+        [
+            layer[last_pos],
+            window.mean(dim=0),
+            window.std(dim=0, unbiased=False),
+        ],
+        dim=0,
+    )
 
 
 def extract_geometric_features(

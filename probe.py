@@ -39,8 +39,8 @@ class HallucinationProbe(nn.Module):
     # ------------------------------------------------------------------
     def _new_model(self) -> LogisticRegression:
         return LogisticRegression(
-            C=0.1,
-            class_weight="balanced",
+            C=0.0003,
+            class_weight=None,
             max_iter=5000,
             random_state=42,
             solver="liblinear",
@@ -97,7 +97,7 @@ class HallucinationProbe(nn.Module):
             self._threshold = 0.5
             return
 
-        n_splits = min(3, int(counts.min()))
+        n_splits = min(5, int(counts.min()))
         cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
         oof_probs = np.zeros(len(y), dtype=np.float32)
 
