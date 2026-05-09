@@ -57,11 +57,55 @@ DATA_FILE     = "./data/dataset.csv"   # path to the dataset CSV
 OUTPUT_FILE   = "results.json"         # where to write the results summary
 BATCH_SIZE    = 8
 USE_GEOMETRIC = False                 # set True to enable geometric feature extraction
+TRUNCATION_SIDES = ("right", "left")  # preserve both prompt start and response end
 TEST_FILE        = "./data/test.csv"   # competition test set (labels are null)
 PREDICTIONS_FILE = "predictions.csv"   # output file with predicted labels
 
 assert OUTPUT_FILE == "results.json"
 assert PREDICTIONS_FILE == "predictions.csv"
+
+
+def extract_batch_features(
+    batch_texts: list[str],
+    tokenizer,
+    model,
+    device: torch.device,
+) -> list[torch.Tensor]:
+    """Extract compact features for both truncation sides and average them."""
+    features_by_side: list[list[torch.Tensor]] = []
+
+    for truncation_side in TRUNCATION_SIDES:
+        tokenizer.truncation_side = truncation_side
+        encoding = tokenizer(
+            batch_texts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=MAX_LENGTH,
+        )
+        input_ids = encoding["input_ids"].to(device)
+        attention_mask = encoding["attention_mask"].to(device)
+
+        with torch.no_grad():
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+
+        hidden = torch.stack(outputs.hidden_states, dim=1).float()
+        mask = attention_mask.cpu()
+
+        side_features: list[torch.Tensor] = []
+        for i in range(hidden.size(0)):
+            feat = aggregation_and_feature_extraction(
+                hidden[i],
+                mask[i],
+                use_geometric=USE_GEOMETRIC,
+            )
+            side_features.append(feat.cpu())
+        features_by_side.append(side_features)
+
+    return [
+        torch.stack(sample_features, dim=0).mean(dim=0)
+        for sample_features in zip(*features_by_side)
+    ]
 # ---------------------------------------------------------------------
 if __name__=='__main__':
     if torch.cuda.is_available():
@@ -75,6 +119,7 @@ if __name__=='__main__':
     print(f"Data         : {DATA_FILE}")
     print(f"Max length   : {MAX_LENGTH} tokens")
     print(f"Geometric feats: {USE_GEOMETRIC}")
+    print(f"Truncation sides: {TRUNCATION_SIDES}")
 
 
     df = pd.read_csv(DATA_FILE)
@@ -109,7 +154,6 @@ if __name__=='__main__':
     model, tokenizer = get_model_and_tokenizer()
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
-    tokenizer.truncation_side = "left"
     model.to(device)
 
     all_features: list = []
@@ -118,39 +162,10 @@ if __name__=='__main__':
     for start in tqdm(range(0, len(all_texts), BATCH_SIZE),
                     desc="Extracting & aggregating", unit="batch"):
 
-        # ── 1. Tokenise the current mini-batch ───────────────────────────────
         batch_texts = all_texts[start : start + BATCH_SIZE]
-        encoding = tokenizer(
-            batch_texts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=MAX_LENGTH,
+        all_features.extend(
+            extract_batch_features(batch_texts, tokenizer, model, device)
         )
-        input_ids      = encoding["input_ids"].to(device)
-        attention_mask = encoding["attention_mask"].to(device)
-
-        # ── 2. LLM forward pass ──────────────────────────────────────────────
-        # outputs.hidden_states: tuple of (n_layers+1) tensors,
-        # each with shape (batch, seq_len, hidden_dim).
-        # Index 0 → token embeddings; index k → transformer layer k.
-        with torch.no_grad():
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-
-        # ── 3. Stack all layers into one tensor, move to CPU ─────────────────
-        # Shape: (batch, n_layers, seq_len, hidden_dim)
-        hidden = torch.stack(outputs.hidden_states, dim=1).float()
-        mask   = attention_mask.cpu()
-
-        # ── 4. Aggregate each sample and store the compact feature vector ─────
-        # The raw `hidden` tensor is released at the end of this loop iteration.
-        for i in range(hidden.size(0)):
-            feat = aggregation_and_feature_extraction(
-                hidden[i],   # (n_layers, seq_len, hidden_dim)
-                mask[i],     # (seq_len,)
-                use_geometric=USE_GEOMETRIC,
-            )
-            all_features.append(feat.cpu())
 
     extract_time = time.time() - t0
     print(f"Done in {extract_time:.1f} s  —  {len(all_features)} feature vectors extracted")
@@ -189,27 +204,9 @@ if __name__=='__main__':
                     desc="Test extraction & aggregation", unit="batch"):
 
         batch_texts = test_texts[start : start + BATCH_SIZE]
-        encoding = tokenizer(
-            batch_texts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=MAX_LENGTH,
+        test_features.extend(
+            extract_batch_features(batch_texts, tokenizer, model, device)
         )
-        input_ids      = encoding["input_ids"].to(device)
-        attention_mask = encoding["attention_mask"].to(device)
-
-        with torch.no_grad():
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-
-        hidden = torch.stack(outputs.hidden_states, dim=1).float()
-        mask   = attention_mask.cpu()
-
-        for i in range(hidden.size(0)):
-            feat = aggregation_and_feature_extraction(
-                hidden[i], mask[i], use_geometric=USE_GEOMETRIC,
-            )
-            test_features.append(feat.cpu())
 
     X_test = np.vstack([f.numpy() for f in test_features])  # (n_test, feature_dim)
 
