@@ -1,12 +1,8 @@
 """
-aggregation.py — Multi-layer aggregation with enhanced geometric features.
+aggregation.py — Compact response-heavy hidden-state aggregation.
 
-Strategy:
-  - Extract representations from early, middle, and late layers
-  - For each layer: [last_token, mean of last 64 tokens, std of last 64 tokens]
-  - Add inter-layer cosine similarities (representation drift)
-  - Add layer-wise L2 norms and their ratios
-  - Add sequence length features
+The final tokens contain the assistant answer, so we summarize the final layer
+with the last token plus mean/std pooling over the last 32 real tokens.
 """
 from __future__ import annotations
 import torch
@@ -30,27 +26,22 @@ def aggregate(
     hidden_states: torch.Tensor,
     attention_mask: torch.Tensor,
 ) -> torch.Tensor:
-    """Multi-layer aggregation: selected layers × (last_token, mean, std)."""
+    """Final-layer aggregation: last token + last-window mean/std."""
     real_positions = attention_mask.nonzero(as_tuple=False).flatten()
     last_pos = int(real_positions[-1].item())
     end_pos = last_pos + 1
 
-    layer_indices = _selected_layer_indices(hidden_states.shape[0])
-    window_size = 64
+    layer = hidden_states[-1]
+    window = layer[max(0, end_pos - 32) : end_pos]
 
-    features = []
-    for layer_idx in layer_indices:
-        layer = hidden_states[layer_idx]
-        window_start = max(0, end_pos - window_size)
-        window = layer[window_start:end_pos]
-
-        features.extend([
-            layer[last_pos],            # last token (896-dim)
-            window.mean(dim=0),         # mean of last N tokens (896-dim)
-            window.std(dim=0, unbiased=False),  # std (896-dim)
-        ])
-
-    return torch.cat(features, dim=0)
+    return torch.cat(
+        [
+            layer[last_pos],
+            window.mean(dim=0),
+            window.std(dim=0, unbiased=False),
+        ],
+        dim=0,
+    )
 
 
 def extract_geometric_features(

@@ -1,10 +1,8 @@
 """
-probe.py — HallucinationProbe with PCA + tuned LogisticRegression.
+probe.py — HallucinationProbe with scaled LogisticRegression.
 
-Improvements over baseline:
-  - StandardScaler + PCA to reduce feature dimensionality
-  - Cross-validated hyperparameter search for C
-  - Class weighting for imbalanced data
+The labelled set is small, so the probe uses strong L2 regularization instead
+of a high-capacity neural net or PCA projection.
 """
 from __future__ import annotations
 import numpy as np
@@ -14,26 +12,24 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
 
 
 class HallucinationProbe(nn.Module):
-    """Binary classifier: StandardScaler → PCA → LogisticRegression."""
+    """Binary classifier: StandardScaler → LogisticRegression."""
 
     def __init__(self) -> None:
         super().__init__()
         self._scaler = StandardScaler()
-        self._pca: PCA | None = None
         self._model = self._new_model()
         self._threshold: float = 0.5
 
     def _new_model(self) -> LogisticRegression:
         return LogisticRegression(
-            C=0.1,                  # much weaker regularization than 0.0003
-            class_weight="balanced",
-            max_iter=10000,
+            C=0.0003,
+            class_weight=None,
+            max_iter=5000,
             random_state=42,
-            solver="lbfgs",
+            solver="liblinear",
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -86,17 +82,10 @@ class HallucinationProbe(nn.Module):
         X = self._clean(X)
         y = np.asarray(y, dtype=int)
 
-        # Scale
         X_scaled = self._scaler.fit_transform(X)
-
-        # PCA: keep 95% variance or at most 200 components
-        n_components = min(200, X_scaled.shape[0] - 1, X_scaled.shape[1])
-        self._pca = PCA(n_components=n_components, random_state=42)
-        X_reduced = self._pca.fit_transform(X_scaled)
-
         self._model = self._new_model()
-        self._model.fit(X_reduced, y)
-        self._fit_oof_threshold(X_reduced, y)
+        self._model.fit(X_scaled, y)
+        self._fit_oof_threshold(X, y)
         return self
 
     def fit_hyperparameters(
@@ -108,10 +97,7 @@ class HallucinationProbe(nn.Module):
         return self
 
     def _prepare(self, X: np.ndarray) -> np.ndarray:
-        X = self._scaler.transform(self._clean(X))
-        if self._pca is not None:
-            X = self._pca.transform(X)
-        return X
+        return self._scaler.transform(self._clean(X))
 
     def predict(self, X: np.ndarray) -> np.ndarray:
         return (self.predict_proba(X)[:, 1] >= self._threshold).astype(int)
