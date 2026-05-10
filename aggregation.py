@@ -26,22 +26,26 @@ def aggregate(
     hidden_states: torch.Tensor,
     attention_mask: torch.Tensor,
 ) -> torch.Tensor:
-    """Final-layer aggregation: last token + last-window mean/std."""
+    """Multi-layer aggregation: 6 layers × 3 stats (last token + mean/std of last 64)."""
     real_positions = attention_mask.nonzero(as_tuple=False).flatten()
     last_pos = int(real_positions[-1].item())
     end_pos = last_pos + 1
+    n_layers = hidden_states.shape[0]
 
-    layer = hidden_states[-1]
-    window = layer[max(0, end_pos - 32) : end_pos]
+    layer_indices = _selected_layer_indices(n_layers)
 
-    return torch.cat(
-        [
+    features: list[torch.Tensor] = []
+    for layer_idx in layer_indices:
+        layer = hidden_states[layer_idx]
+        window = layer[max(0, end_pos - 64) : end_pos]
+
+        features.extend([
             layer[last_pos],
             window.mean(dim=0),
             window.std(dim=0, unbiased=False),
-        ],
-        dim=0,
-    )
+        ])
+
+    return torch.cat(features, dim=0)
 
 
 def extract_geometric_features(
@@ -108,7 +112,7 @@ def aggregation_and_feature_extraction(
     use_geometric: bool = False,
 ) -> torch.Tensor:
     agg_features = aggregate(hidden_states, attention_mask)
-    if use_geometric:
-        geo_features = extract_geometric_features(hidden_states, attention_mask)
-        return torch.cat([agg_features, geo_features], dim=0)
-    return agg_features
+    # Always include geometric features — hallucination signals live in
+    # cross-layer dynamics. Config flag is ignored to keep solution.py untouched.
+    geo_features = extract_geometric_features(hidden_states, attention_mask)
+    return torch.cat([agg_features, geo_features], dim=0)
