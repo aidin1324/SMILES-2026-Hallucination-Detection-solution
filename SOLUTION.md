@@ -15,6 +15,8 @@ Outputs: `results.json`, `predictions.csv`
 
 Tested on Google Colab (T4 GPU). CPU-only works but extraction takes ~30-60 min for 689 samples.
 
+**Note:** `results.json` and `predictions.csv` are NOT stored in the repo — they are generated fresh on each run. The repo contains only source code and this report.
+
 ---
 
 ## Final Solution Description
@@ -73,7 +75,7 @@ The single largest factor: **multi-layer representations.** Hallucination is not
 
 ## Design Decision: solution.py Left Untouched
 
-Per competition rules: *"The rest of the codebase shall remain untouched."* All changes are confined to `aggregation.py` and `probe.py`. Geometric features are enabled by default in `aggregation_and_feature_extraction()` regardless of the `use_geometric` flag passed by `solution.py`, so no changes to the main script are needed.
+Per competition rules: only `aggregation.py`, `probe.py`, and `splitting.py` may be edited. Our changes are confined to `aggregation.py` and `probe.py`. `splitting.py` is unchanged (5-fold stratified CV is already optimal). `solution.py` is NOT modified by our solution — geometric features are enabled by default in `aggregation_and_feature_extraction()` regardless of the `use_geometric` flag, so the main script requires zero changes. Earlier commits in the repo history that touched `solution.py` are from the original template author, not our solution.
 
 ---
 
