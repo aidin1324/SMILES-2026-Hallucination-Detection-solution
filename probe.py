@@ -75,12 +75,14 @@ class HallucinationProbe(nn.Module):
         oof_probs = np.zeros(len(y), dtype=np.float32)
         for idx_train, idx_val in cv.split(X, y):
             scaler = StandardScaler()
+            pca_local = PCA(
+                n_components=min(self._pca_components, len(idx_train), X.shape[1]),
+                random_state=42,
+            )
             X_tr = scaler.fit_transform(X[idx_train])
-            if self._pca is not None:
-                X_tr = self._pca.fit_transform(X_tr)
+            X_tr = pca_local.fit_transform(X_tr)
             X_va = scaler.transform(X[idx_val])
-            if self._pca is not None:
-                X_va = self._pca.transform(X_va)
+            X_va = pca_local.transform(X_va)
             model = self._new_model()
             model.fit(X_tr, y[idx_train])
             oof_probs[idx_val] = model.predict_proba(X_va)[:, 1]
